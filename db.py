@@ -11,11 +11,13 @@ from config import (
 )
 
 
-def build_connection_string():
+def build_connection_string(database=None):
+    db = DATABASE if database is None else database
+
     parts = [
         f"DRIVER={{{DRIVER}}}",
         f"SERVER={SERVER}",
-        f"DATABASE={DATABASE}",
+        f"DATABASE={db}",
         f"Encrypt={ENCRYPT}",
         f"TrustServerCertificate={TRUST_SERVER_CERTIFICATE}"
     ]
