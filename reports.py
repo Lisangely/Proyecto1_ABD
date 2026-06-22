@@ -103,6 +103,172 @@ def listar_restricciones():
     return execute_query(query, (SCHEMA,))
 
 
+def obtener_sql_restriccion(restriccion, tabla):
+    tipo_query = """
+    SELECT con.type
+    FROM sys.objects con
+    INNER JOIN sys.tables tab
+        ON con.parent_object_id = tab.object_id
+    INNER JOIN sys.schemas s
+        ON tab.schema_id = s.schema_id
+    WHERE s.name = ?
+      AND tab.name = ?
+      AND con.name = ?
+      AND con.type IN ('PK', 'F', 'UQ', 'C', 'D');
+    """
+
+    _, filas_tipo = execute_query(tipo_query, (SCHEMA, tabla, restriccion))
+    if not filas_tipo:
+        return None
+
+    tipo = str(filas_tipo[0][0]).strip()
+
+    if tipo in ("C", "D"):
+        return _sql_check_o_default(restriccion, tabla, tipo)
+
+    if tipo in ("PK", "UQ"):
+        return _sql_clave(restriccion, tabla, tipo)
+
+    if tipo == "F":
+        return _sql_foreign_key(restriccion, tabla)
+
+    return None
+
+
+def _sql_check_o_default(restriccion, tabla, tipo):
+    query = """
+    SELECT
+        COALESCE(cc.definition, dc.definition) AS definicion_sql
+    FROM sys.objects con
+    INNER JOIN sys.tables tab
+        ON con.parent_object_id = tab.object_id
+    INNER JOIN sys.schemas s
+        ON tab.schema_id = s.schema_id
+    LEFT JOIN sys.check_constraints cc
+        ON con.object_id = cc.object_id
+    LEFT JOIN sys.default_constraints dc
+        ON con.object_id = dc.object_id
+    WHERE s.name = ?
+      AND tab.name = ?
+      AND con.name = ?;
+    """
+
+    _, filas = execute_query(query, (SCHEMA, tabla, restriccion))
+    if not filas or filas[0][0] is None:
+        return None
+
+    definicion = str(filas[0][0]).strip()
+
+    if tipo == "C":
+        return (
+            f"ALTER TABLE [{SCHEMA}].[{tabla}] "
+            f"ADD CONSTRAINT [{restriccion}] CHECK {definicion};"
+        )
+
+    columna_query = """
+    SELECT c.name
+    FROM sys.default_constraints dc
+    INNER JOIN sys.columns c
+        ON dc.parent_object_id = c.object_id
+       AND dc.parent_column_id = c.column_id
+    INNER JOIN sys.tables tab
+        ON dc.parent_object_id = tab.object_id
+    INNER JOIN sys.schemas s
+        ON tab.schema_id = s.schema_id
+    WHERE s.name = ?
+      AND tab.name = ?
+      AND dc.name = ?;
+    """
+
+    _, col_filas = execute_query(columna_query, (SCHEMA, tabla, restriccion))
+    columna = col_filas[0][0] if col_filas else "columna"
+
+    return (
+        f"ALTER TABLE [{SCHEMA}].[{tabla}] "
+        f"ADD CONSTRAINT [{restriccion}] DEFAULT {definicion} FOR [{columna}];"
+    )
+
+
+def _sql_clave(restriccion, tabla, tipo):
+    query = """
+    SELECT c.name, ic.key_ordinal
+    FROM sys.key_constraints kc
+    INNER JOIN sys.tables tab
+        ON kc.parent_object_id = tab.object_id
+    INNER JOIN sys.schemas s
+        ON tab.schema_id = s.schema_id
+    INNER JOIN sys.index_columns ic
+        ON kc.parent_object_id = ic.object_id
+       AND kc.unique_index_id = ic.index_id
+    INNER JOIN sys.columns c
+        ON ic.object_id = c.object_id
+       AND ic.column_id = c.column_id
+    WHERE s.name = ?
+      AND tab.name = ?
+      AND kc.name = ?
+    ORDER BY ic.key_ordinal;
+    """
+
+    _, filas = execute_query(query, (SCHEMA, tabla, restriccion))
+    if not filas:
+        return None
+
+    columnas = ", ".join(f"[{fila[0]}]" for fila in filas)
+    tipo_sql = "PRIMARY KEY" if tipo == "PK" else "UNIQUE"
+
+    return (
+        f"ALTER TABLE [{SCHEMA}].[{tabla}] "
+        f"ADD CONSTRAINT [{restriccion}] {tipo_sql} ({columnas});"
+    )
+
+
+def _sql_foreign_key(restriccion, tabla):
+    query = """
+    SELECT
+        cp.name AS columna_origen,
+        sch_ref.name AS esquema_ref,
+        tr.name AS tabla_ref,
+        cr.name AS columna_ref,
+        fkc.constraint_column_id
+    FROM sys.foreign_keys fk
+    INNER JOIN sys.foreign_key_columns fkc
+        ON fk.object_id = fkc.constraint_object_id
+    INNER JOIN sys.tables tp
+        ON fk.parent_object_id = tp.object_id
+    INNER JOIN sys.tables tr
+        ON fk.referenced_object_id = tr.object_id
+    INNER JOIN sys.schemas sch_orig
+        ON tp.schema_id = sch_orig.schema_id
+    INNER JOIN sys.schemas sch_ref
+        ON tr.schema_id = sch_ref.schema_id
+    INNER JOIN sys.columns cp
+        ON fkc.parent_object_id = cp.object_id
+       AND fkc.parent_column_id = cp.column_id
+    INNER JOIN sys.columns cr
+        ON fkc.referenced_object_id = cr.object_id
+       AND fkc.referenced_column_id = cr.column_id
+    WHERE sch_orig.name = ?
+      AND tp.name = ?
+      AND fk.name = ?
+    ORDER BY fkc.constraint_column_id;
+    """
+
+    _, filas = execute_query(query, (SCHEMA, tabla, restriccion))
+    if not filas:
+        return None
+
+    columnas_origen = ", ".join(f"[{fila[0]}]" for fila in filas)
+    esquema_ref = filas[0][1]
+    tabla_ref = filas[0][2]
+    columnas_ref = ", ".join(f"[{fila[3]}]" for fila in filas)
+
+    return (
+        f"ALTER TABLE [{SCHEMA}].[{tabla}] "
+        f"ADD CONSTRAINT [{restriccion}] FOREIGN KEY ({columnas_origen}) "
+        f"REFERENCES [{esquema_ref}].[{tabla_ref}] ({columnas_ref});"
+    )
+
+
 def detalle_indices():
     query = """
     SELECT
@@ -159,6 +325,27 @@ def listar_triggers():
 
     return execute_query(query, (SCHEMA,))
 
+
+def obtener_sql_trigger(trigger_name, tabla):
+    query = """
+    SELECT OBJECT_DEFINITION(tr.object_id) AS definicion_sql
+    FROM sys.triggers tr
+    INNER JOIN sys.tables tb
+        ON tr.parent_id = tb.object_id
+    INNER JOIN sys.schemas s
+        ON tb.schema_id = s.schema_id
+    WHERE s.name = ?
+      AND tb.name = ?
+      AND tr.name = ?
+      AND tr.is_ms_shipped = 0;
+    """
+
+    _, filas = execute_query(query, (SCHEMA, tabla, trigger_name))
+
+    if not filas or filas[0][0] is None:
+        return None
+
+    return str(filas[0][0]).strip()
 
 
 def tamano_tablas():
@@ -276,8 +463,11 @@ def _columnas_de_tabla(tabla):
     return filas
 
 
+def nombres_columnas(tabla):
+    return [fila[0] for fila in _columnas_de_tabla(tabla)]
+
+
 # ==========================================================
-# REQUERIMIENTO 7
 # Tamano estimado de cada registro en bytes
 # ==========================================================
 
