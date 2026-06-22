@@ -5,6 +5,19 @@ from init_db import ensure_initialized
 from ui.app import StreamUCVApp
 
 
+def _mensaje_error_conexion(error):
+    texto = str(error)
+    if "18456" in texto or "Login failed" in texto:
+        return (
+            "No se pudo conectar a SQL Server.\n\n"
+            "Revisa config.py:\n"
+            "- USE_WINDOWS_AUTH = True para tu cuenta Windows\n"
+            "- USE_WINDOWS_AUTH = False y ajusta USERNAME/PASSWORD si usas SQL auth\n\n"
+            f"Detalle tecnico: {texto}"
+        )
+    return texto
+
+
 def iniciar_app():
     ventana = tk.Tk()
     ventana.withdraw()
@@ -18,7 +31,10 @@ def iniciar_app():
                 + "\n".join(f"- {accion}" for accion in acciones),
             )
     except Exception as error:
-        messagebox.showerror("Error al inicializar la base de datos", str(error))
+        messagebox.showerror(
+            "Error al inicializar la base de datos",
+            _mensaje_error_conexion(error),
+        )
         ventana.destroy()
         return
 

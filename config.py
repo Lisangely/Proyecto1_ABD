@@ -3,8 +3,8 @@ DATABASE = "StreamUCV"
 
 USE_WINDOWS_AUTH = True
 
-USERNAME = "sa"
-PASSWORD = "tu_password"
+USERNAME = "user"
+PASSWORD = "123"
 
 DRIVER = "ODBC Driver 18 for SQL Server"
 

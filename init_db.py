@@ -10,7 +10,6 @@ SQL_DIR = Path(__file__).parent / "sql"
 
 CREATE_TABLES_SCRIPT = SQL_DIR / "create_tables_sqlserver.sql"
 INSERT_DATA_SCRIPT = SQL_DIR / "insert_tables_sqlserver.sql"
-TRIGGERS_SCRIPT = SQL_DIR / "create_triggers_sqlserver.sql"
 
 
 def _split_sql_batches(content):
@@ -140,29 +139,6 @@ def has_data():
         conn.close()
 
 
-def triggers_exist():
-    conn = get_connection()
-
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT 1
-            FROM sys.triggers tr
-            INNER JOIN sys.tables tb
-                ON tr.parent_id = tb.object_id
-            INNER JOIN sys.schemas s
-                ON tb.schema_id = s.schema_id
-            WHERE s.name = ?
-              AND tr.is_ms_shipped = 0
-            """,
-            SCHEMA,
-        )
-        return cursor.fetchone() is not None
-    finally:
-        conn.close()
-
-
 def ensure_initialized():
     """
     Crea la base de datos, tablas e inserts si aun no existen.
@@ -193,14 +169,5 @@ def ensure_initialized():
 
         _execute_sql_file(INSERT_DATA_SCRIPT)
         actions.append("Datos de prueba insertados")
-
-    if not triggers_exist():
-        if not TRIGGERS_SCRIPT.is_file():
-            raise FileNotFoundError(
-                f"No se encontro el script: {TRIGGERS_SCRIPT}"
-            )
-
-        _execute_sql_file(TRIGGERS_SCRIPT)
-        actions.append("Triggers de prueba creados")
 
     return actions
